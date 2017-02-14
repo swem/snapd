@@ -24,6 +24,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/snapcore/snapd/dirs"
@@ -119,8 +120,6 @@ type SideInfo struct {
 	SnapID            string   `yaml:"snap-id" json:"snap-id"`
 	Revision          Revision `yaml:"revision" json:"revision"`
 	Channel           string   `yaml:"channel,omitempty" json:"channel,omitempty"`
-	DeveloperID       string   `yaml:"developer-id,omitempty" json:"developer-id,omitempty"`
-	Developer         string   `yaml:"developer,omitempty" json:"developer,omitempty"` // XXX: obsolete, will be retired after full backfilling of DeveloperID
 	EditedSummary     string   `yaml:"summary,omitempty" json:"summary,omitempty"`
 	EditedDescription string   `yaml:"description,omitempty" json:"description,omitempty"`
 	Private           bool     `yaml:"private,omitempty" json:"private,omitempty"`
@@ -144,6 +143,7 @@ type Info struct {
 	Epoch            string
 	Confinement      ConfinementType
 	Apps             map[string]*AppInfo
+	Aliases          map[string]*AppInfo
 	Hooks            map[string]*HookInfo
 	Plugs            map[string]*PlugInfo
 	Slots            map[string]*SlotInfo
@@ -158,21 +158,25 @@ type Info struct {
 	DownloadInfo
 
 	IconURL string
-	Prices  map[string]float64 `yaml:"prices,omitempty" json:"prices,omitempty"`
+	Prices  map[string]float64
 	MustBuy bool
 
+	PublisherID string
+	Publisher   string
+
 	Screenshots []ScreenshotInfo
-	Channels    map[string]*Ref
+	Channels    map[string]*ChannelSnapInfo
 }
 
-// Ref is the minimum information that can be used to clearly
+// ChannelSnapInfo is the minimum information that can be used to clearly
 // distinguish different revisions of the same snap.
-type Ref struct {
+type ChannelSnapInfo struct {
 	Revision    Revision        `json:"revision"`
 	Confinement ConfinementType `json:"confinement"`
 	Version     string          `json:"version"`
 	Channel     string          `json:"channel"`
 	Epoch       string          `json:"epoch"`
+	Size        int64           `json:"size"`
 }
 
 // Name returns the blessed name for the snap.
@@ -254,9 +258,14 @@ func (s *Info) XdgRuntimeDirs() string {
 	return filepath.Join(dirs.XdgRuntimeDirGlob, fmt.Sprintf("snap.%s", s.Name()))
 }
 
-// NeedsDevMode retursn whether the snap needs devmode.
+// NeedsDevMode returns whether the snap needs devmode.
 func (s *Info) NeedsDevMode() bool {
 	return s.Confinement == DevModeConfinement
+}
+
+// NeedsClassic  returns whether the snap needs classic confinement consent.
+func (s *Info) NeedsClassic() bool {
+	return s.Confinement == ClassicConfinement
 }
 
 // DownloadInfo contains the information to download a snap.
@@ -302,6 +311,30 @@ type PlugInfo struct {
 	Hooks     map[string]*HookInfo
 }
 
+// SecurityTags returns security tags associated with a given plug.
+func (plug *PlugInfo) SecurityTags() []string {
+	tags := make([]string, 0, len(plug.Apps)+len(plug.Hooks))
+	for _, app := range plug.Apps {
+		tags = append(tags, app.SecurityTag())
+	}
+	for _, hook := range plug.Hooks {
+		tags = append(tags, hook.SecurityTag())
+	}
+	sort.Strings(tags)
+	return tags
+}
+
+// SecurityTags returns security tags associated with a given slot.
+func (slot *SlotInfo) SecurityTags() []string {
+	tags := make([]string, 0, len(slot.Apps))
+	for _, app := range slot.Apps {
+		tags = append(tags, app.SecurityTag())
+	}
+	// NOTE: hooks cannot have slots
+	sort.Strings(tags)
+	return tags
+}
+
 // SlotInfo provides information about a slot.
 type SlotInfo struct {
 	Snap *Info
@@ -318,17 +351,15 @@ type AppInfo struct {
 	Snap *Info
 
 	Name    string
+	Aliases []string
 	Command string
 
 	Daemon          string
 	StopTimeout     timeout.Timeout
 	StopCommand     string
+	ReloadCommand   string
 	PostStopCommand string
 	RestartCond     systemd.RestartCondition
-
-	Socket       bool
-	SocketMode   string
-	ListenStream string
 
 	// TODO: this should go away once we have more plumbing and can change
 	// things vs refactor
@@ -394,6 +425,11 @@ func (app *AppInfo) LauncherCommand() string {
 // LauncherStopCommand returns the launcher command line to use when invoking the app stop command binary.
 func (app *AppInfo) LauncherStopCommand() string {
 	return app.launcherCommand("--command=stop")
+}
+
+// LauncherReloadCommand returns the launcher command line to use when invoking the app stop command binary.
+func (app *AppInfo) LauncherReloadCommand() string {
+	return app.launcherCommand("--command=reload")
 }
 
 // LauncherPostStopCommand returns the launcher command line to use when invoking the app post-stop command binary.

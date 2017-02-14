@@ -1,7 +1,7 @@
 // -*- Mode: Go; indent-tabs-mode: t -*-
 
 /*
- * Copyright (C) 2015-2016 Canonical Ltd
+ * Copyright (C) 2015-2017 Canonical Ltd
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 3 as
@@ -60,6 +60,7 @@ func (sds *snapDeclSuite) TestDecodeOK(c *C) {
 		"snap-name: first\n" +
 		"publisher-id: dev-id1\n" +
 		"refresh-control:\n  - foo\n  - bar\n" +
+		"auto-aliases:\n  - cmd1\n  - cmd_2\n  - Cmd-3\n  - CMD.4\n" +
 		sds.tsLine +
 		"body-length: 0\n" +
 		"sign-key-sha3-384: Jv8_JiHiIzJVcO9M55pPdqSDWUvuhfDIBJUS-3VW7F_idjix7Ffn5qMxB21ZQuij" +
@@ -76,6 +77,7 @@ func (sds *snapDeclSuite) TestDecodeOK(c *C) {
 	c.Check(snapDecl.SnapName(), Equals, "first")
 	c.Check(snapDecl.PublisherID(), Equals, "dev-id1")
 	c.Check(snapDecl.RefreshControl(), DeepEquals, []string{"foo", "bar"})
+	c.Check(snapDecl.AutoAliases(), DeepEquals, []string{"cmd1", "cmd_2", "Cmd-3", "CMD.4"})
 }
 
 func (sds *snapDeclSuite) TestEmptySnapName(c *C) {
@@ -96,7 +98,7 @@ func (sds *snapDeclSuite) TestEmptySnapName(c *C) {
 	c.Check(snapDecl.SnapName(), Equals, "")
 }
 
-func (sds *snapDeclSuite) TestMissingRefreshControl(c *C) {
+func (sds *snapDeclSuite) TestMissingRefreshControlAutoAliases(c *C) {
 	encoded := "type: snap-declaration\n" +
 		"authority-id: canonical\n" +
 		"series: 16\n" +
@@ -112,6 +114,7 @@ func (sds *snapDeclSuite) TestMissingRefreshControl(c *C) {
 	c.Assert(err, IsNil)
 	snapDecl := a.(*asserts.SnapDeclaration)
 	c.Check(snapDecl.RefreshControl(), HasLen, 0)
+	c.Check(snapDecl.AutoAliases(), HasLen, 0)
 }
 
 const (
@@ -126,6 +129,7 @@ func (sds *snapDeclSuite) TestDecodeInvalid(c *C) {
 		"snap-name: first\n" +
 		"publisher-id: dev-id1\n" +
 		"refresh-control:\n  - foo\n  - bar\n" +
+		"auto-aliases:\n  - cmd1\n  - cmd2\n" +
 		"plugs:\n  interface1: true\n" +
 		"slots:\n  interface2: true\n" +
 		sds.tsLine +
@@ -148,6 +152,9 @@ func (sds *snapDeclSuite) TestDecodeInvalid(c *C) {
 		{"plugs:\n  interface1: true\n", "plugs:\n  intf1:\n    foo: bar\n", `plug rule for interface "intf1" must specify at least one of.*`},
 		{"slots:\n  interface2: true\n", "slots: \n", `"slots" header must be a map`},
 		{"slots:\n  interface2: true\n", "slots:\n  intf1:\n    foo: bar\n", `slot rule for interface "intf1" must specify at least one of.*`},
+		{"auto-aliases:\n  - cmd1\n  - cmd2\n", "auto-aliases: cmd0\n", `"auto-aliases" header must be a list of strings`},
+		{"auto-aliases:\n  - cmd1\n  - cmd2\n", "auto-aliases:\n  -\n    - nested\n", `"auto-aliases" header must be a list of strings`},
+		{"auto-aliases:\n  - cmd1\n  - cmd2\n", "auto-aliases:\n  - _cmd-1\n  - cmd2\n", `"auto-aliases" header contains an invalid element: "_cmd-1"`},
 		{sds.tsLine, "", `"timestamp" header is mandatory`},
 		{sds.tsLine, "timestamp: \n", `"timestamp" header should not be empty`},
 		{sds.tsLine, "timestamp: 12:30\n", `"timestamp" header is not a RFC3339 date: .*`},
@@ -163,6 +170,7 @@ func (sds *snapDeclSuite) TestDecodeInvalid(c *C) {
 
 func (sds *snapDeclSuite) TestDecodePlugsAndSlots(c *C) {
 	encoded := `type: snap-declaration
+format: 1
 authority-id: canonical
 series: 16
 snap-id: snap-id-1
@@ -257,23 +265,23 @@ AXNpZw==`
 	c.Assert(plugRule1.DenyInstallation, HasLen, 1)
 	c.Check(plugRule1.DenyInstallation[0].PlugAttributes, Equals, asserts.NeverMatchAttributes)
 	c.Assert(plugRule1.AllowAutoConnection, HasLen, 1)
-	c.Check(plugRule1.AllowAutoConnection[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "a1".*`)
-	c.Check(plugRule1.AllowAutoConnection[0].PlugAttributes.Check(nil), ErrorMatches, `attribute "b1".*`)
+	c.Check(plugRule1.AllowAutoConnection[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "a1".*`)
+	c.Check(plugRule1.AllowAutoConnection[0].PlugAttributes.Check(nil, nil), ErrorMatches, `attribute "b1".*`)
 	c.Check(plugRule1.AllowAutoConnection[0].SlotSnapTypes, DeepEquals, []string{"app"})
 	c.Check(plugRule1.AllowAutoConnection[0].SlotPublisherIDs, DeepEquals, []string{"acme"})
 	c.Assert(plugRule1.DenyAutoConnection, HasLen, 1)
-	c.Check(plugRule1.DenyAutoConnection[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "a1".*`)
-	c.Check(plugRule1.DenyAutoConnection[0].PlugAttributes.Check(nil), ErrorMatches, `attribute "b1".*`)
+	c.Check(plugRule1.DenyAutoConnection[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "a1".*`)
+	c.Check(plugRule1.DenyAutoConnection[0].PlugAttributes.Check(nil, nil), ErrorMatches, `attribute "b1".*`)
 	plugRule2 := snapDecl.PlugRule("interface2")
 	c.Assert(plugRule2, NotNil)
 	c.Assert(plugRule2.AllowInstallation, HasLen, 1)
 	c.Check(plugRule2.AllowInstallation[0].PlugAttributes, Equals, asserts.AlwaysMatchAttributes)
 	c.Assert(plugRule2.AllowConnection, HasLen, 1)
-	c.Check(plugRule2.AllowConnection[0].PlugAttributes.Check(nil), ErrorMatches, `attribute "a2".*`)
-	c.Check(plugRule2.AllowConnection[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "b2".*`)
+	c.Check(plugRule2.AllowConnection[0].PlugAttributes.Check(nil, nil), ErrorMatches, `attribute "a2".*`)
+	c.Check(plugRule2.AllowConnection[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "b2".*`)
 	c.Assert(plugRule2.DenyConnection, HasLen, 1)
-	c.Check(plugRule2.DenyConnection[0].PlugAttributes.Check(nil), ErrorMatches, `attribute "a2".*`)
-	c.Check(plugRule2.DenyConnection[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "b2".*`)
+	c.Check(plugRule2.DenyConnection[0].PlugAttributes.Check(nil, nil), ErrorMatches, `attribute "a2".*`)
+	c.Check(plugRule2.DenyConnection[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "b2".*`)
 	c.Check(plugRule2.DenyConnection[0].SlotSnapIDs, DeepEquals, []string{"snapidsnapidsnapidsnapidsnapid01", "snapidsnapidsnapidsnapidsnapid02"})
 
 	slotRule3 := snapDecl.SlotRule("interface3")
@@ -281,25 +289,92 @@ AXNpZw==`
 	c.Assert(slotRule3.DenyInstallation, HasLen, 1)
 	c.Check(slotRule3.DenyInstallation[0].SlotAttributes, Equals, asserts.NeverMatchAttributes)
 	c.Assert(slotRule3.AllowAutoConnection, HasLen, 1)
-	c.Check(slotRule3.AllowAutoConnection[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "c1".*`)
-	c.Check(slotRule3.AllowAutoConnection[0].PlugAttributes.Check(nil), ErrorMatches, `attribute "d1".*`)
+	c.Check(slotRule3.AllowAutoConnection[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "c1".*`)
+	c.Check(slotRule3.AllowAutoConnection[0].PlugAttributes.Check(nil, nil), ErrorMatches, `attribute "d1".*`)
 	c.Check(slotRule3.AllowAutoConnection[0].PlugSnapTypes, DeepEquals, []string{"app"})
 	c.Check(slotRule3.AllowAutoConnection[0].PlugPublisherIDs, DeepEquals, []string{"acme"})
 	c.Assert(slotRule3.DenyAutoConnection, HasLen, 1)
-	c.Check(slotRule3.DenyAutoConnection[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "c1".*`)
-	c.Check(slotRule3.DenyAutoConnection[0].PlugAttributes.Check(nil), ErrorMatches, `attribute "d1".*`)
+	c.Check(slotRule3.DenyAutoConnection[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "c1".*`)
+	c.Check(slotRule3.DenyAutoConnection[0].PlugAttributes.Check(nil, nil), ErrorMatches, `attribute "d1".*`)
 	slotRule4 := snapDecl.SlotRule("interface4")
 	c.Assert(slotRule4, NotNil)
 	c.Assert(slotRule4.AllowAutoConnection, HasLen, 1)
-	c.Check(slotRule4.AllowConnection[0].PlugAttributes.Check(nil), ErrorMatches, `attribute "c2".*`)
-	c.Check(slotRule4.AllowConnection[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "d2".*`)
+	c.Check(slotRule4.AllowConnection[0].PlugAttributes.Check(nil, nil), ErrorMatches, `attribute "c2".*`)
+	c.Check(slotRule4.AllowConnection[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "d2".*`)
 	c.Assert(slotRule4.DenyAutoConnection, HasLen, 1)
-	c.Check(slotRule4.DenyConnection[0].PlugAttributes.Check(nil), ErrorMatches, `attribute "c2".*`)
-	c.Check(slotRule4.DenyConnection[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "d2".*`)
+	c.Check(slotRule4.DenyConnection[0].PlugAttributes.Check(nil, nil), ErrorMatches, `attribute "c2".*`)
+	c.Check(slotRule4.DenyConnection[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "d2".*`)
 	c.Check(slotRule4.DenyConnection[0].PlugSnapIDs, DeepEquals, []string{"snapidsnapidsnapidsnapidsnapid01", "snapidsnapidsnapidsnapidsnapid02"})
 	c.Assert(slotRule4.AllowInstallation, HasLen, 1)
-	c.Check(slotRule4.AllowInstallation[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "e1".*`)
+	c.Check(slotRule4.AllowInstallation[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "e1".*`)
 	c.Check(slotRule4.AllowInstallation[0].SlotSnapTypes, DeepEquals, []string{"app"})
+}
+
+func (sds *snapDeclSuite) TestSuggestedFormat(c *C) {
+	fmtnum, err := asserts.SuggestFormat(asserts.SnapDeclarationType, nil, nil)
+	c.Assert(err, IsNil)
+	c.Check(fmtnum, Equals, 0)
+
+	headers := map[string]interface{}{
+		"plugs": map[string]interface{}{
+			"interface1": "true",
+		},
+	}
+	fmtnum, err = asserts.SuggestFormat(asserts.SnapDeclarationType, headers, nil)
+	c.Assert(err, IsNil)
+	c.Check(fmtnum, Equals, 1)
+
+	headers = map[string]interface{}{
+		"slots": map[string]interface{}{
+			"interface2": "true",
+		},
+	}
+	fmtnum, err = asserts.SuggestFormat(asserts.SnapDeclarationType, headers, nil)
+	c.Assert(err, IsNil)
+	c.Check(fmtnum, Equals, 1)
+
+	headers = map[string]interface{}{
+		"plugs": map[string]interface{}{
+			"interface3": map[string]interface{}{
+				"allow-auto-connection": map[string]interface{}{
+					"plug-attributes": map[string]interface{}{
+						"x": "$SLOT(x)",
+					},
+				},
+			},
+		},
+	}
+	fmtnum, err = asserts.SuggestFormat(asserts.SnapDeclarationType, headers, nil)
+	c.Assert(err, IsNil)
+	c.Check(fmtnum, Equals, 2)
+
+	headers = map[string]interface{}{
+		"slots": map[string]interface{}{
+			"interface3": map[string]interface{}{
+				"allow-auto-connection": map[string]interface{}{
+					"plug-attributes": map[string]interface{}{
+						"x": "$SLOT(x)",
+					},
+				},
+			},
+		},
+	}
+	fmtnum, err = asserts.SuggestFormat(asserts.SnapDeclarationType, headers, nil)
+	c.Assert(err, IsNil)
+	c.Check(fmtnum, Equals, 2)
+
+	// errors
+	headers = map[string]interface{}{
+		"plugs": "what",
+	}
+	_, err = asserts.SuggestFormat(asserts.SnapDeclarationType, headers, nil)
+	c.Assert(err, ErrorMatches, `assertion snap-declaration: "plugs" header must be a map`)
+
+	headers = map[string]interface{}{
+		"slots": "what",
+	}
+	_, err = asserts.SuggestFormat(asserts.SnapDeclarationType, headers, nil)
+	c.Assert(err, ErrorMatches, `assertion snap-declaration: "slots" header must be a map`)
 }
 
 func prereqDevAccount(c *C, storeDB assertstest.SignerDB, db *asserts.Database) {
@@ -556,7 +631,7 @@ func (sbs *snapBuildSuite) TestSnapBuildCheckInconsistentTimestamp(c *C) {
 	c.Assert(err, IsNil)
 
 	err = db.Check(snapBuild)
-	c.Assert(err, ErrorMatches, "snap-build assertion timestamp outside of signing key validity")
+	c.Assert(err, ErrorMatches, `snap-build assertion timestamp outside of signing key validity \(key valid since.*\)`)
 }
 
 type snapRevSuite struct {
@@ -694,7 +769,7 @@ func (srs *snapRevSuite) TestSnapRevisionCheckInconsistentTimestamp(c *C) {
 	c.Assert(err, IsNil)
 
 	err = db.Check(snapRev)
-	c.Assert(err, ErrorMatches, "snap-revision assertion timestamp outside of signing key validity")
+	c.Assert(err, ErrorMatches, `snap-revision assertion timestamp outside of signing key validity \(key valid since.*\)`)
 }
 
 func (srs *snapRevSuite) TestSnapRevisionCheckUntrustedAuthority(c *C) {
@@ -1091,23 +1166,23 @@ AXNpZw==`
 	c.Assert(plugRule1.DenyInstallation, HasLen, 1)
 	c.Check(plugRule1.DenyInstallation[0].PlugAttributes, Equals, asserts.NeverMatchAttributes)
 	c.Assert(plugRule1.AllowAutoConnection, HasLen, 1)
-	c.Check(plugRule1.AllowAutoConnection[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "a1".*`)
-	c.Check(plugRule1.AllowAutoConnection[0].PlugAttributes.Check(nil), ErrorMatches, `attribute "b1".*`)
+	c.Check(plugRule1.AllowAutoConnection[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "a1".*`)
+	c.Check(plugRule1.AllowAutoConnection[0].PlugAttributes.Check(nil, nil), ErrorMatches, `attribute "b1".*`)
 	c.Check(plugRule1.AllowAutoConnection[0].SlotSnapTypes, DeepEquals, []string{"app"})
 	c.Check(plugRule1.AllowAutoConnection[0].SlotPublisherIDs, DeepEquals, []string{"acme"})
 	c.Assert(plugRule1.DenyAutoConnection, HasLen, 1)
-	c.Check(plugRule1.DenyAutoConnection[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "a1".*`)
-	c.Check(plugRule1.DenyAutoConnection[0].PlugAttributes.Check(nil), ErrorMatches, `attribute "b1".*`)
+	c.Check(plugRule1.DenyAutoConnection[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "a1".*`)
+	c.Check(plugRule1.DenyAutoConnection[0].PlugAttributes.Check(nil, nil), ErrorMatches, `attribute "b1".*`)
 	plugRule2 := baseDecl.PlugRule("interface2")
 	c.Assert(plugRule2, NotNil)
 	c.Assert(plugRule2.AllowInstallation, HasLen, 1)
 	c.Check(plugRule2.AllowInstallation[0].PlugAttributes, Equals, asserts.AlwaysMatchAttributes)
 	c.Assert(plugRule2.AllowConnection, HasLen, 1)
-	c.Check(plugRule2.AllowConnection[0].PlugAttributes.Check(nil), ErrorMatches, `attribute "a2".*`)
-	c.Check(plugRule2.AllowConnection[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "b2".*`)
+	c.Check(plugRule2.AllowConnection[0].PlugAttributes.Check(nil, nil), ErrorMatches, `attribute "a2".*`)
+	c.Check(plugRule2.AllowConnection[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "b2".*`)
 	c.Assert(plugRule2.DenyConnection, HasLen, 1)
-	c.Check(plugRule2.DenyConnection[0].PlugAttributes.Check(nil), ErrorMatches, `attribute "a2".*`)
-	c.Check(plugRule2.DenyConnection[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "b2".*`)
+	c.Check(plugRule2.DenyConnection[0].PlugAttributes.Check(nil, nil), ErrorMatches, `attribute "a2".*`)
+	c.Check(plugRule2.DenyConnection[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "b2".*`)
 	c.Check(plugRule2.DenyConnection[0].SlotSnapIDs, DeepEquals, []string{"snapidsnapidsnapidsnapidsnapid01", "snapidsnapidsnapidsnapidsnapid02"})
 
 	slotRule3 := baseDecl.SlotRule("interface3")
@@ -1115,24 +1190,24 @@ AXNpZw==`
 	c.Assert(slotRule3.DenyInstallation, HasLen, 1)
 	c.Check(slotRule3.DenyInstallation[0].SlotAttributes, Equals, asserts.NeverMatchAttributes)
 	c.Assert(slotRule3.AllowAutoConnection, HasLen, 1)
-	c.Check(slotRule3.AllowAutoConnection[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "c1".*`)
-	c.Check(slotRule3.AllowAutoConnection[0].PlugAttributes.Check(nil), ErrorMatches, `attribute "d1".*`)
+	c.Check(slotRule3.AllowAutoConnection[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "c1".*`)
+	c.Check(slotRule3.AllowAutoConnection[0].PlugAttributes.Check(nil, nil), ErrorMatches, `attribute "d1".*`)
 	c.Check(slotRule3.AllowAutoConnection[0].PlugSnapTypes, DeepEquals, []string{"app"})
 	c.Check(slotRule3.AllowAutoConnection[0].PlugPublisherIDs, DeepEquals, []string{"acme"})
 	c.Assert(slotRule3.DenyAutoConnection, HasLen, 1)
-	c.Check(slotRule3.DenyAutoConnection[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "c1".*`)
-	c.Check(slotRule3.DenyAutoConnection[0].PlugAttributes.Check(nil), ErrorMatches, `attribute "d1".*`)
+	c.Check(slotRule3.DenyAutoConnection[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "c1".*`)
+	c.Check(slotRule3.DenyAutoConnection[0].PlugAttributes.Check(nil, nil), ErrorMatches, `attribute "d1".*`)
 	slotRule4 := baseDecl.SlotRule("interface4")
 	c.Assert(slotRule4, NotNil)
 	c.Assert(slotRule4.AllowConnection, HasLen, 1)
-	c.Check(slotRule4.AllowConnection[0].PlugAttributes.Check(nil), ErrorMatches, `attribute "c2".*`)
-	c.Check(slotRule4.AllowConnection[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "d2".*`)
+	c.Check(slotRule4.AllowConnection[0].PlugAttributes.Check(nil, nil), ErrorMatches, `attribute "c2".*`)
+	c.Check(slotRule4.AllowConnection[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "d2".*`)
 	c.Assert(slotRule4.DenyConnection, HasLen, 1)
-	c.Check(slotRule4.DenyConnection[0].PlugAttributes.Check(nil), ErrorMatches, `attribute "c2".*`)
-	c.Check(slotRule4.DenyConnection[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "d2".*`)
+	c.Check(slotRule4.DenyConnection[0].PlugAttributes.Check(nil, nil), ErrorMatches, `attribute "c2".*`)
+	c.Check(slotRule4.DenyConnection[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "d2".*`)
 	c.Check(slotRule4.DenyConnection[0].PlugSnapIDs, DeepEquals, []string{"snapidsnapidsnapidsnapidsnapid01", "snapidsnapidsnapidsnapidsnapid02"})
 	c.Assert(slotRule4.AllowInstallation, HasLen, 1)
-	c.Check(slotRule4.AllowInstallation[0].SlotAttributes.Check(nil), ErrorMatches, `attribute "e1".*`)
+	c.Check(slotRule4.AllowInstallation[0].SlotAttributes.Check(nil, nil), ErrorMatches, `attribute "e1".*`)
 	c.Check(slotRule4.AllowInstallation[0].SlotSnapTypes, DeepEquals, []string{"app"})
 
 }

@@ -56,6 +56,8 @@ func ValidateHook(hook *HookInfo) error {
 	return nil
 }
 
+var validAlias = regexp.MustCompile("^[a-zA-Z0-9][-_.a-zA-Z0-9]*$")
+
 // Validate verifies the content in the info.
 func Validate(info *Info) error {
 	name := info.Name()
@@ -81,6 +83,13 @@ func Validate(info *Info) error {
 		err := ValidateApp(app)
 		if err != nil {
 			return err
+		}
+	}
+
+	// validate aliases
+	for alias, app := range info.Aliases {
+		if !validAlias.MatchString(alias) {
+			return fmt.Errorf("cannot have %q as alias name for app %q - use only letters, digits, dash, underscore and dot characters", alias, app.Name)
 		}
 	}
 
@@ -140,9 +149,8 @@ func ValidateApp(app *AppInfo) error {
 	checks := map[string]string{
 		"command":           app.Command,
 		"stop-command":      app.StopCommand,
+		"reload-command":    app.ReloadCommand,
 		"post-stop-command": app.PostStopCommand,
-		"socket-mode":       app.SocketMode,
-		"listen-stream":     app.ListenStream,
 		"bus-name":          app.BusName,
 	}
 
